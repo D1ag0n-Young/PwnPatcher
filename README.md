@@ -7,7 +7,7 @@
 安装依赖：
 
 ```bash
-pip install pwntools pyqt5 pyqt5-tools -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install pwntools pyqt5 pyqt5-tools keystone-engine -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 下载PwnPatcher文件
