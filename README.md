@@ -33,7 +33,7 @@ git clone https://github.com/D1ag0n-Young/PwnPatcher.git
 10. Patch fmt by call  仅支持x86/64，在当前位置调用call eh_frame_addr实现修补
 11. init patcher   初始化PwnPatcher为初始值
 
-patch过程存在与内存，ida并不能直接看到，patch成功后的文件存放于当前目录，命令方式为`[name]_patch`,以`_patch`结尾
+patch过程存在于内存，ida并不能直接看到，patch成功后的文件存放于当前目录，命令方式为`[name]_patch`,以`_patch`结尾
 
 ## todo
 
