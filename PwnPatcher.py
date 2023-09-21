@@ -376,7 +376,7 @@ class PatchDialog(QDialog):
 
         addr_hbox = QHBoxLayout()
         self.start_edit = QLineEdit()
-        self.start_edit.setReadOnly(True)
+        #self.start_edit.setReadOnly(True)
         self.start_edit.setText(hex(self.start_addr))
         #self.start_edit.setFixedWidth(200)
         addr_hbox.addWidget(self.start_edit)
