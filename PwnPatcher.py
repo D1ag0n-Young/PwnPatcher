@@ -263,9 +263,11 @@ class AwdPwnPatcher:
             """.format(hex(patch_start_addr+5), fmt_addr, hex(printf_addr))
         else:
             assembly = """
+            push rbp
             mov rsi, rdi
             lea rdi, qword ptr [{0}]
             call {1}
+            pop rbp
             ret
             """.format(hex(fmt_addr), hex(printf_addr))
         self.patch_by_call(call_from, assembly=assembly)
@@ -337,10 +339,10 @@ class PatchDialog(QDialog):
         return self.constant_edit.text().strip()
 
     def set_start_addr_user(self):
-        self.start_addr = self.start_edit.text().strip()
+        self.start_addr = int(self.start_edit.text().strip(),16)
     
     def set_end_addr_user(self):
-        self.end_addr = self.end_edit.text().strip()
+        self.end_addr = int(self.end_edit.text().strip(),16)
     
     def set_asm_code(self):
         self.asm_code = self.asm_edit.toPlainText().strip()
@@ -595,20 +597,18 @@ class PatchDialog(QDialog):
             QMessageBox.warning(None, "Error", "Failed to get file patch!")
             return
         self.awdpwnpatcher.arch = self.arch
-        if self.awdpwnpatcher.patch_fmt_by_call(int(self.start_addr,16)):
+        if self.awdpwnpatcher.patch_fmt_by_call(self.start_addr):
             self.awdpwnpatcher.save()
             print("Code patch_fmt_by_call[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
             QMessageBox.information(None, "Success", "Code patch_fmt_by_call[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
 
     def validate_input(self):
-        self.set_value()
-        self.start_addr = self.start_edit.text().strip()
-        self.end_addr = self.end_edit.text().strip()
         try:
-            if not self.start_addr or not self.start_addr.startswith('0x') or not str(int(self.start_addr,16)).isdigit():
+            self.set_value()
+            if not self.start_addr :
                 QMessageBox.warning(None, "Error", "Please input start address!")
                 return False,0
-            if not self.is_fmt_patch and(not self.end_addr or not self.end_addr.startswith('0x') or not str(int(self.end_addr,16)).isdigit()):
+            if not self.is_fmt_patch and not self.end_addr:
                 QMessageBox.warning(None, "Error", "Please input end address!")
                 return False,0
         except:
@@ -618,8 +618,6 @@ class PatchDialog(QDialog):
         try:
 
             if not self.is_fmt_patch :
-                self.start_addr = int(self.start_addr, 16)
-                self.end_addr = int(self.end_addr, 16)
                 if self.start_addr >= self.end_addr:
                     QMessageBox.warning(None, "Error", "Invalid address range!")
                     return False,0
@@ -658,7 +656,8 @@ class PatchFilePlugin(idaapi.plugin_t):
             return
 
     def term(self):
-        pass
+        print("PwnPatcher success exited!")
 
 def PLUGIN_ENTRY():
     return PatchFilePlugin()
+
