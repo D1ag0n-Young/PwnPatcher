@@ -84,6 +84,7 @@ class AwdPwnPatcher:
         self.eh_frame_addr = self.eh_frame_section.header.sh_addr
         self.eh_frame_size = self.eh_frame_section.header.sh_size
         self.offset = 0
+        self.constant_offset = 0
         self.adjust_eh_frame_size()
 
     def adjust_eh_frame_size(self):
@@ -230,6 +231,15 @@ class AwdPwnPatcher:
         self.patch_nums += len(string)
         return patch_start_addr
 
+    def add_constant_in_addr(self, patch_start_addr, string):
+        patch_start_addr = patch_start_addr + self.constant_offset
+        if PYTHON_VERSION == 3:
+            string = string.encode("latin-1")
+        self.binary.write(patch_start_addr, string)
+        self.constant_offset += len(string)
+        self.patch_nums += len(string)
+        return patch_start_addr
+    
     def patch_fmt_by_call(self, call_from):
         if self.arch != "i386" and self.arch != "amd64":
             QMessageBox.warning(None, "Error", "Sorry, patch_fmt_by_call only support x86 architecture!")
@@ -312,7 +322,8 @@ class PatchDialog(QDialog):
             self.end_addr = 0
             self.asm_code = ""
             self.constant = ""
-            self.constant_offset = 0
+            self.constant_addr = 0
+            self.constant_type = False 
             self.is_fmt_patch = False
             self.path = self.get_file_patch()
             self.awdpwnpatcher = AwdPwnPatcher(self.path)
@@ -365,7 +376,7 @@ class PatchDialog(QDialog):
                 self.encode_asm.setText("")
         except (keystone.KsError,Exception) as e:
             # 如果汇编语句不合法，显示错误信息
-            self.output_label.setText("Encode code:")
+            self.output_label.setText("Encode code[Syntax error]:")
             self.encode_asm.setText("...")
     
     def init_ui(self):
@@ -393,27 +404,19 @@ class PatchDialog(QDialog):
 
         layout.addLayout(addr_hbox)
 
-        arch_label = QLabel("Architecture:")
+        arch_label = QLabel("patch constant in:")
         layout.addWidget(arch_label)
 
         self.arch_combobox = QComboBox()
-        self.arch = self.awdpwnpatcher.arch
-        if self.arch == 'i386' or self.arch == 'amd64':
-            self.arch_combobox.addItem("i386")
-            self.arch_combobox.addItem("amd64")
-        elif self.arch == 'arm' or self.arch == 'aarch64':
-            self.arch_combobox.addItem("arm")
-            self.arch_combobox.addItem("aarch64")
-        elif self.arch == 'mips' or self.arch == 'mips64':
-            self.arch_combobox.addItem("mips")
-            self.arch_combobox.addItem("mips64")
+        self.arch_combobox.addItem("eh_frame")
+        self.arch_combobox.addItem("address")
         # 根据self.arch设置默认显示的Item
-        self.arch_combobox.setCurrentText(self.arch)
-        self.arch_combobox.currentIndexChanged.connect(lambda index: self.on_arch_change(index))
+        self.arch_combobox.setCurrentText("eh_frame")
+        self.arch_combobox.currentIndexChanged.connect(lambda index: self.on_constant_change(index))
         layout.addWidget(self.arch_combobox)
         
         constant_hbox = QHBoxLayout()
-        addr_label = QLabel("constant_in_ehframe:")
+        addr_label = QLabel("constant:")
         constant_hbox.addWidget(addr_label)
         self.constant_edit = QLineEdit()
         self.constant_edit.setText('%s')
@@ -430,7 +433,8 @@ class PatchDialog(QDialog):
         constant_addr_hbox.addWidget(self.constant_addr_edit)
         layout.addLayout(constant_addr_hbox)
 
-        asm_label = QLabel("Assembly code:")
+        self.arch = self.awdpwnpatcher.arch
+        asm_label = QLabel("Assembly code[%s]:" % self.arch)
         layout.addWidget(asm_label)
         self.asm_edit = QTextEdit()
         self.asm_edit.setText(self.start_asm_code)
@@ -453,7 +457,7 @@ class PatchDialog(QDialog):
 
 
         btn_hbox = QVBoxLayout()
-        patch_by_ori_btn = QPushButton("write constant")
+        patch_by_ori_btn = QPushButton("patch constant")
         patch_by_ori_btn.clicked.connect(lambda: self.write_constant())
         btn_hbox.addWidget(patch_by_ori_btn)
 
@@ -481,26 +485,12 @@ class PatchDialog(QDialog):
         self.show()
 
 
-    def on_arch_change(self, index):
+    def on_constant_change(self, index):
         if index == 0:
-            self.arch = "i386"
-            self.bits = 32
-        elif index == 1:
-            self.arch = "amd64"
-            self.bits = 64
-        elif index == 2:
-            self.arch = "arm"
-        elif index == 3:
-            self.arch = "aarch64"
-        elif index == 4:
-            self.arch = "mips"
-            self.bits = 32
-        elif index == 5:
-            self.arch = "mips64"
-            self.bits = 64
-        self.awdpwnpatcher = AwdPwnPatcher(self.path,self.arch,self.bits)
-        self.update_output_label() # arch变换时同步更新 encode asm 文本框
-        
+            self.constant_type = False
+        else:
+            self.constant_type = True
+   
 
     def set_value(self):
         self.set_start_addr_user()
@@ -511,7 +501,7 @@ class PatchDialog(QDialog):
         self.start_edit.setText(hex(self.start_addr))
         self.end_edit.setText(hex(self.start_addr+self.start_item_size))
         # 根据self.arch设置默认显示的Item
-        self.arch_combobox.setCurrentText(self.awdpwnpatcher.binary.arch)
+        self.arch_combobox.setCurrentText("eh_frame")
         self.constant_edit.setText('%s')
         self.constant_addr_edit.setText('None')
         self.asm_edit.setText(self.start_asm_code)
@@ -520,14 +510,21 @@ class PatchDialog(QDialog):
         self.awdpwnpatcher = AwdPwnPatcher(self.path,self.awdpwnpatcher.binary.arch,self.awdpwnpatcher.binary.bits)
 
     def write_constant(self):
+        self.set_value()
         constant = self.get_constant()
         if not constant:
             QMessageBox.warning(None, "Error", "constant is None!")
             return
-        self.constant_offset = self.awdpwnpatcher.add_constant_in_ehframe(constant+'\x00\x00')
-        if self.constant_offset :
-            QMessageBox.information(None, "Success", "constant str add successful! Please use offset %s for access"%(hex(self.constant_offset)))
-        self.constant_addr_edit.setText(hex(self.constant_offset))
+        if self.constant_type == False:
+            self.constant_addr = self.awdpwnpatcher.add_constant_in_ehframe(constant+'\x00\x00')
+            if self.constant_addr :
+                QMessageBox.information(None, "Success", "constant str add successful! Please use offset %s for access"%(hex(self.constant_addr)))
+        else:
+            self.constant_addr = self.awdpwnpatcher.add_constant_in_addr(self.start_addr,constant+'\x00')
+            if self.constant_addr :
+                QMessageBox.information(None, "Success", "constant str add in %s"%hex(self.constant_addr))
+        self.awdpwnpatcher.save()
+        self.constant_addr_edit.setText(hex(self.constant_addr))
 
     def get_jmp_len(self):
         if self.arch == "i386" or self.arch == "amd64":
@@ -553,15 +550,14 @@ class PatchDialog(QDialog):
         if not self.path:
             QMessageBox.warning(None, "Error", "Failed to get file patch!")
             return
-        self.awdpwnpatcher.arch = self.arch
         try:
             if patch_max < self.get_jmp_len():
                 QMessageBox.warning(None, "Error", "The given address range is less than the encoding length of jmp_to[%d]!"%self.get_jmp_len())
                 return False
+            self.awdpwnpatcher.patch_by_jmp(self.start_addr,self.end_addr,self.asm_code)
         except Exception as e:
             QMessageBox.warning(None, "Error", "Please input correct assembly code! " + "info: " + str(e))
             return False
-        self.awdpwnpatcher.patch_by_jmp(self.start_addr,self.end_addr,self.asm_code)
         self.awdpwnpatcher.save()
         print("Code patch_by_jmp[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
         QMessageBox.information(None, "Success", "Code patch_by_jmp[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
@@ -660,4 +656,3 @@ class PatchFilePlugin(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return PatchFilePlugin()
-
