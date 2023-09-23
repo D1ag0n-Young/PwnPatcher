@@ -238,7 +238,7 @@ class AwdPwnPatcher:
         self.binary.write(patch_start_addr, string)
         self.constant_offset += len(string)
         self.patch_nums += len(string)
-        return patch_start_addr
+        return patch_start_addr,self.constant_offset
     
     def patch_fmt_by_call(self, call_from):
         if self.arch != "i386" and self.arch != "amd64":
@@ -281,7 +281,7 @@ class AwdPwnPatcher:
             ret
             """.format(hex(fmt_addr), hex(printf_addr))
         self.patch_by_call(call_from, assembly=assembly)
-        return True
+        return True,assembly
             
     def save(self):
         self.fix_eh_frame_flags()
@@ -310,7 +310,26 @@ class AwdPwnPatcher:
                     flags = flags.encode("latin-1")
                 self.binary.write(e_phoff + phdr_size * i + p_flags_offset, flags)
 
-
+class PatchRecord:
+    def __init__(self):
+        self.records = []
+    
+    def add_patch(self, start, end, code_len,patch_mode, asm_code):
+        patch = {'start_addr': start, 'end_addr':end, 'len':code_len, 'patch_mod': patch_mode, 'asm_code': asm_code}
+        self.records.append(patch)
+    
+    def export_table(self):
+        table = "start_addr\tend_addr \tcoedlen\tpatch_mod\t\t\tasm_code\n"  # 表头
+        for record in self.records:
+            row = ""
+            if record['patch_mod'] == 'patch_by_original':
+                row = "0x{:08X}\t0x{:08X}\t0x{:02X}  \t{} \t{}\n".format(record['start_addr'],record['end_addr'], record['len'],record['patch_mod'], record['asm_code'])
+            elif record['patch_mod'] == 'patch_by_call':
+                row = "0x{:08X}\t0x{:08X}\t0x{:02X}  \t{} \t\t{}\n".format(record['start_addr'],record['end_addr'], record['len'],record['patch_mod'], record['asm_code'])
+            else:
+                row = "0x{:08X}\t0x{:08X}\t0x{:02X}  \t{} \t\t\t{}\n".format(record['start_addr'],record['end_addr'], record['len'],record['patch_mod'], record['asm_code'])
+            table += row
+        return table
 
 class PatchDialog(QDialog):
     def __init__(self, parent=None):
@@ -323,11 +342,13 @@ class PatchDialog(QDialog):
             self.asm_code = ""
             self.constant = ""
             self.constant_addr = 0
-            self.constant_type = False 
+            self.total_patch_nums = 0
+            self.constant_type = "eh_frame" 
             self.is_fmt_patch = False
             self.path = self.get_file_patch()
             self.awdpwnpatcher = AwdPwnPatcher(self.path)
             self.init_ui()
+            self.record = PatchRecord()
         except Exception as e:
             print(str(e))
             import traceback
@@ -469,27 +490,31 @@ class PatchDialog(QDialog):
         patch_by_ori_btn.clicked.connect(lambda: self.patch_by_original())
         btn_hbox.addWidget(patch_by_ori_btn)
 
-        patch_by_ori_btn = QPushButton("Patch fmt by call")
-        patch_by_ori_btn.clicked.connect(lambda: self.patch_fmt_by_call())
-        btn_hbox.addWidget(patch_by_ori_btn)
+        patch_by_call_btn = QPushButton("Patch fmt by call")
+        patch_by_call_btn.clicked.connect(lambda: self.patch_fmt_by_call())
+        btn_hbox.addWidget(patch_by_call_btn)
 
-        patch_by_ori_btn = QPushButton("init patcher")
-        patch_by_ori_btn.clicked.connect(lambda: self.init_patcher())
-        btn_hbox.addWidget(patch_by_ori_btn)
+        patch_log_btn = QPushButton("patcher log")
+        breakpoint()
+        patch_log_btn.clicked.connect(lambda: self.export_log())
+        btn_hbox.addWidget(patch_log_btn)
 
+        patch_init_btn = QPushButton("init patcher")
+        patch_init_btn.clicked.connect(lambda: self.init_patcher())
+        btn_hbox.addWidget(patch_init_btn)
         
         layout.addLayout(btn_hbox)
 
         self.setLayout(layout)
-        self.setWindowTitle("PwnPatcher")
+        self.setWindowTitle("PwnPatcher - Version 1.5")
         self.show()
 
 
     def on_constant_change(self, index):
         if index == 0:
-            self.constant_type = False
+            self.constant_type = "eh_frame"
         else:
-            self.constant_type = True
+            self.constant_type = "address"
    
 
     def set_value(self):
@@ -507,24 +532,38 @@ class PatchDialog(QDialog):
         self.asm_edit.setText(self.start_asm_code)
         self.output_label.setText("Encode code:")
         self.update_output_label()
+        self.total_patch_nums = 0
         self.awdpwnpatcher = AwdPwnPatcher(self.path,self.awdpwnpatcher.binary.arch,self.awdpwnpatcher.binary.bits)
+        self.record = PatchRecord()
+
+    def export_log(self):
+        print('-'*70)
+        print(self.record.export_table())
+        print("total nums: " + str(self.total_patch_nums))
 
     def write_constant(self):
+        self.awdpwnpatcher.patch_nums = 0
         self.set_value()
         constant = self.get_constant()
         if not constant:
             QMessageBox.warning(None, "Error", "constant is None!")
             return
-        if self.constant_type == False:
+        if self.constant_type == "eh_frame":
             self.constant_addr = self.awdpwnpatcher.add_constant_in_ehframe(constant+'\x00\x00')
             if self.constant_addr :
                 QMessageBox.information(None, "Success", "constant str add successful! Please use offset %s for access"%(hex(self.constant_addr)))
+                ehframe_startaddr = self.awdpwnpatcher.eh_frame_addr+self.awdpwnpatcher.offset
+                ehframe_endaddr = self.awdpwnpatcher.eh_frame_addr+self.awdpwnpatcher.offset+len(constant)+2
+                self.record.add_patch(ehframe_startaddr,ehframe_endaddr,self.awdpwnpatcher.patch_nums,self.constant_type,constant)
         else:
-            self.constant_addr = self.awdpwnpatcher.add_constant_in_addr(self.start_addr,constant+'\x00')
+            self.constant_addr,conut= self.awdpwnpatcher.add_constant_in_addr(self.start_addr,constant+'\x00')
             if self.constant_addr :
                 QMessageBox.information(None, "Success", "constant str add in %s"%hex(self.constant_addr))
+                self.record.add_patch(self.constant_addr,self.constant_addr+conut,len(constant+'\x00'),self.constant_type+' ',constant)
         self.awdpwnpatcher.save()
         self.constant_addr_edit.setText(hex(self.constant_addr))
+        
+        self.total_patch_nums+=self.awdpwnpatcher.patch_nums
 
     def get_jmp_len(self):
         if self.arch == "i386" or self.arch == "amd64":
@@ -539,10 +578,11 @@ class PatchDialog(QDialog):
         patch_start_addr = self.awdpwnpatcher.eh_frame_addr
         payload = "{} {}".format(jmp_ins, hex(patch_start_addr))
         payloadcode, _ = self.awdpwnpatcher.ks.asm(payload,addr=self.start_addr)
-        return len(payloadcode)
+        return len(payloadcode),payload
 
 
     def patch_by_jmp(self):
+        self.awdpwnpatcher.patch_nums = 0
         self.is_fmt_patch = False
         valid,patch_max = self.validate_input()
         if not valid:
@@ -550,8 +590,9 @@ class PatchDialog(QDialog):
         if not self.path:
             QMessageBox.warning(None, "Error", "Failed to get file patch!")
             return
+        jmp_len,jmp_asm = self.get_jmp_len()
         try:
-            if patch_max < self.get_jmp_len():
+            if patch_max < jmp_len:
                 QMessageBox.warning(None, "Error", "The given address range is less than the encoding length of jmp_to[%d]!"%self.get_jmp_len())
                 return False
             self.awdpwnpatcher.patch_by_jmp(self.start_addr,self.end_addr,self.asm_code)
@@ -560,9 +601,13 @@ class PatchDialog(QDialog):
             return False
         self.awdpwnpatcher.save()
         print("Code patch_by_jmp[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
+        jmp_mod_asm = jmp_asm +'; -> '+ self.asm_code + ';'+"jmp %s"%hex(self.end_addr)
+        self.record.add_patch(self.start_addr,self.end_addr,self.awdpwnpatcher.patch_nums,"patch_by_jmp",jmp_mod_asm.replace('\n',';'))
+        self.total_patch_nums+=self.awdpwnpatcher.patch_nums
         QMessageBox.information(None, "Success", "Code patch_by_jmp[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
 
     def patch_by_original(self):
+        self.awdpwnpatcher.patch_nums = 0
         self.is_fmt_patch = False
         valid,patch_max = self.validate_input()
         if not valid:
@@ -570,9 +615,9 @@ class PatchDialog(QDialog):
         if not self.path:
             QMessageBox.warning(None, "Error", "Failed to get file patch!")
             return
-        self.awdpwnpatcher.arch = self.arch
+        hellcode = ""
         try:
-            hellcode, count = self.awdpwnpatcher.ks.asm(self.asm_code,addr=self.start_addr)
+            hellcode, _ = self.awdpwnpatcher.ks.asm(self.asm_code,addr=self.start_addr)
             if len(hellcode) > patch_max:
                 QMessageBox.warning(None, "Error", "Assembly code length greater than maximum patch length!")
                 return False
@@ -582,9 +627,12 @@ class PatchDialog(QDialog):
         self.awdpwnpatcher.patch_origin(self.start_addr,self.end_addr,self.asm_code)
         self.awdpwnpatcher.save()
         print("Code patch_by_original[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
+        self.record.add_patch(self.start_addr,self.end_addr,self.awdpwnpatcher.patch_nums,"patch_by_original",self.asm_code.replace('\n',';'))
+        self.total_patch_nums+=self.awdpwnpatcher.patch_nums
         QMessageBox.information(None, "Success", "Code patch_by_original[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
 
     def patch_fmt_by_call(self):
+        self.awdpwnpatcher.patch_nums = 0
         self.is_fmt_patch = True
         valid, _ = self.validate_input()
         if not valid:
@@ -592,10 +640,18 @@ class PatchDialog(QDialog):
         if not self.path:
             QMessageBox.warning(None, "Error", "Failed to get file patch!")
             return
-        self.awdpwnpatcher.arch = self.arch
-        if self.awdpwnpatcher.patch_fmt_by_call(self.start_addr):
+        call_asm = ''
+        call_result = False
+        try:
+            call_result,call_asm = self.awdpwnpatcher.patch_fmt_by_call(self.start_addr)
+        except Exception as e:
+            QMessageBox.warning(None, "Error", "patch_fmt_by_call: %s" % str(e))
+            return
+        if call_result:
             self.awdpwnpatcher.save()
             print("Code patch_fmt_by_call[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
+            self.record.add_patch(self.start_addr,self.end_addr,self.awdpwnpatcher.patch_nums,"patch_by_call",call_asm.replace('\n',';').replace('            ',''))
+            self.total_patch_nums+=self.awdpwnpatcher.patch_nums
             QMessageBox.information(None, "Success", "Code patch_fmt_by_call[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
 
     def validate_input(self):
@@ -656,3 +712,6 @@ class PatchFilePlugin(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return PatchFilePlugin()
+
+# pl = PatchFilePlugin()
+# pl.run('d')
