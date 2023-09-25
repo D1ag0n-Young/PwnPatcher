@@ -243,11 +243,15 @@ class AwdPwnPatcher:
     def patch_fmt_by_call(self, call_from):
         if self.arch != "i386" and self.arch != "amd64":
             QMessageBox.warning(None, "Error", "Sorry, patch_fmt_by_call only support x86 architecture!")
-            return False
+            return False,''
         fmt_addr = self.add_constant_in_ehframe("%s\x00\x00")
         patch_start_addr = self.eh_frame_addr + self.offset
-
-        printf_addr = (call_from + 5 + u32(self.binary.read(call_from+1, 4))) & 0xffffffff
+        call_first = u8(self.binary.read(call_from, 1))
+        if 0xe8 == call_first:
+            printf_addr = (call_from + 5 + u32(self.binary.read(call_from+1, 4))) & 0xffffffff
+        else:
+            QMessageBox.warning(None, "Error", "The assembly at this address is not a call instruction")
+            return False,''
         if self.bits == 32 and not self.pie:
             assembly = """
             mov eax, dword ptr [esp+4]
@@ -494,15 +498,20 @@ class PatchDialog(QDialog):
         patch_by_call_btn.clicked.connect(lambda: self.patch_fmt_by_call())
         btn_hbox.addWidget(patch_by_call_btn)
 
-        patch_log_btn = QPushButton("patcher log")
-        breakpoint()
-        patch_log_btn.clicked.connect(lambda: self.export_log())
-        btn_hbox.addWidget(patch_log_btn)
-
         patch_init_btn = QPushButton("init patcher")
         patch_init_btn.clicked.connect(lambda: self.init_patcher())
         btn_hbox.addWidget(patch_init_btn)
-        
+
+        btn_row = QHBoxLayout()
+        patch_log_btn = QPushButton("patcher log")
+        patch_log_btn.clicked.connect(lambda: self.export_log())
+        btn_row.addWidget(patch_log_btn)
+
+        save_btn = QPushButton("Save")
+        btn_row.addWidget(save_btn)
+        save_btn.clicked.connect(lambda: self.save_elf())
+        btn_hbox.addLayout(btn_row)
+
         layout.addLayout(btn_hbox)
 
         self.setLayout(layout)
@@ -541,6 +550,10 @@ class PatchDialog(QDialog):
         print(self.record.export_table())
         print("total nums: " + str(self.total_patch_nums))
 
+    def save_elf(self):
+        self.awdpwnpatcher.save()
+        print('binary patch saved success!')
+
     def write_constant(self):
         self.awdpwnpatcher.patch_nums = 0
         self.set_value()
@@ -551,18 +564,17 @@ class PatchDialog(QDialog):
         if self.constant_type == "eh_frame":
             self.constant_addr = self.awdpwnpatcher.add_constant_in_ehframe(constant+'\x00\x00')
             if self.constant_addr :
-                QMessageBox.information(None, "Success", "constant str add successful! Please use offset %s for access"%(hex(self.constant_addr)))
                 ehframe_startaddr = self.awdpwnpatcher.eh_frame_addr+self.awdpwnpatcher.offset
                 ehframe_endaddr = self.awdpwnpatcher.eh_frame_addr+self.awdpwnpatcher.offset+len(constant)+2
                 self.record.add_patch(ehframe_startaddr,ehframe_endaddr,self.awdpwnpatcher.patch_nums,self.constant_type,constant)
+                QMessageBox.information(None, "Success", "constant str add successful! Please use offset %s for access"%(hex(self.constant_addr)))
         else:
             self.constant_addr,conut= self.awdpwnpatcher.add_constant_in_addr(self.start_addr,constant+'\x00')
             if self.constant_addr :
-                QMessageBox.information(None, "Success", "constant str add in %s"%hex(self.constant_addr))
                 self.record.add_patch(self.constant_addr,self.constant_addr+conut,len(constant+'\x00'),self.constant_type+' ',constant)
-        self.awdpwnpatcher.save()
-        self.constant_addr_edit.setText(hex(self.constant_addr))
+                QMessageBox.information(None, "Success", "constant str add in %s"%hex(self.constant_addr))
         
+        self.constant_addr_edit.setText(hex(self.constant_addr))
         self.total_patch_nums+=self.awdpwnpatcher.patch_nums
 
     def get_jmp_len(self):
@@ -599,11 +611,10 @@ class PatchDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(None, "Error", "Please input correct assembly code! " + "info: " + str(e))
             return False
-        self.awdpwnpatcher.save()
-        print("Code patch_by_jmp[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
         jmp_mod_asm = jmp_asm +'; -> '+ self.asm_code + ';'+"jmp %s"%hex(self.end_addr)
         self.record.add_patch(self.start_addr,self.end_addr,self.awdpwnpatcher.patch_nums,"patch_by_jmp",jmp_mod_asm.replace('\n',';'))
         self.total_patch_nums+=self.awdpwnpatcher.patch_nums
+        print("Code patch_by_jmp[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
         QMessageBox.information(None, "Success", "Code patch_by_jmp[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
 
     def patch_by_original(self):
@@ -625,10 +636,9 @@ class PatchDialog(QDialog):
             QMessageBox.warning(None, "Error", "Please input correct assembly code! " + "info: " + str(e))
             return False
         self.awdpwnpatcher.patch_origin(self.start_addr,self.end_addr,self.asm_code)
-        self.awdpwnpatcher.save()
-        print("Code patch_by_original[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
         self.record.add_patch(self.start_addr,self.end_addr,self.awdpwnpatcher.patch_nums,"patch_by_original",self.asm_code.replace('\n',';'))
         self.total_patch_nums+=self.awdpwnpatcher.patch_nums
+        print("Code patch_by_original[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
         QMessageBox.information(None, "Success", "Code patch_by_original[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
 
     def patch_fmt_by_call(self):
@@ -648,10 +658,9 @@ class PatchDialog(QDialog):
             QMessageBox.warning(None, "Error", "patch_fmt_by_call: %s" % str(e))
             return
         if call_result:
-            self.awdpwnpatcher.save()
-            print("Code patch_fmt_by_call[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
             self.record.add_patch(self.start_addr,self.end_addr,self.awdpwnpatcher.patch_nums,"patch_by_call",call_asm.replace('\n',';').replace('            ',''))
             self.total_patch_nums+=self.awdpwnpatcher.patch_nums
+            print("Code patch_fmt_by_call[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
             QMessageBox.information(None, "Success", "Code patch_fmt_by_call[%d bytes] successfully!" % self.awdpwnpatcher.patch_nums)
 
     def validate_input(self):
